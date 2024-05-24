@@ -1,0 +1,1807 @@
+---
+title: "LOL pro league"
+author: "Murphy Li"
+date: "2024-04-18"
+output: pdf_document
+---
+
+```{r}
+library(pacman)
+p_load(tidyverse, hms, parallel, lubridate, GGally, pscl, stargazer, caret, car, corrplot, randomForest, recipes, hash, keras,RColorBrewer, xgboost, pROC)
+
+```
+
+load in data
+```{r}
+df2014<-read.csv("2014.csv")
+df2015<-read.csv("2015.csv")
+df2016<-read.csv("2016.csv")
+df2017<-read.csv("2017.csv")
+df2018<-read.csv("2018.csv")
+df2019<-read.csv("2019.csv")
+df2020<-read.csv("2020.csv")
+df2021<-read.csv("2021.csv")
+df2022<-read.csv("2022.csv")
+df2023<-read.csv("2023.csv")
+df2024<-read.csv("2024.csv")
+
+
+```
+
+merge all into one df
+```{r}
+df<-bind_rows(list(df2014, df2015, df2016, df2017, df2018, df2019, df2020, df2021, df2022, df2023, df2024))
+#free up memory by removing old dfs
+rm(df2014, df2015, df2016, df2017, df2018, df2019, df2020, df2021, df2022, df2023, df2024)
+
+```
+
+rename NA LCS to LCS and EU LCS to LEC
+```{r}
+df$league[df$league == 'NA LCS']<- 'LCS'
+df$league[df$league == 'EU LCS']<- 'LEC'
+df$league[df$league == 'OGN']<- 'LCK'
+```
+
+convert values of game time from integer to understandable time in hours minutes and seconds
+```{r}
+df$gamelength <- hms(df$gamelength)
+#change gamelength into seconds
+df$gamelengthins <- as.numeric(df$gamelength, units = "secs")
+
+df$gamelengthins[df$gamelengthins>7000] <- NA
+df$gamelengthins[is.na(df$gamelengthins)] <- mean(df$gamelengthins, na.rm = T)
+```
+
+add column called winner which states which side won (red or blue)
+```{r}
+convert_result <- function(result, side) {
+  ifelse(result == 1, side, ifelse(side == "Red", "Blue", "Red"))
+}
+
+df$winner <- convert_result(df$result, df$side)
+```
+
+transform date variable to date from character
+```{r}
+date_time<-as.POSIXct(df$date)
+df$date <- format(date_time, "%Y-%m")
+df$date <- paste0(df$date, "-01")
+df$date <- as.Date(df$date)
+```
+
+
+
+pivot wider to get champions as a variable, get red team blue team names are variables, filter to keep team info, red blue bans, and remove uneccesary variables
+```{r}
+df<-df%>%
+  mutate(side_position = paste(side, position, sep = "_"))%>%
+  group_by(gameid)%>%
+  mutate(percent_total_kpm = team.kpm/ckpm, 
+         blue_top = first(champion[side_position == 'Blue_top']),
+         blue_jg = first(champion[side_position == 'Blue_jng']),
+         blue_mid = first(champion[side_position == 'Blue_mid']),
+         blue_adc = first(champion[side_position == 'Blue_bot']),
+         blue_sup = first(champion[side_position == 'Blue_sup']),
+         red_top = first(champion[side_position == 'Red_top']),
+         red_jg = first(champion[side_position == 'Red_jng']),
+         red_mid = first(champion[side_position == 'Red_mid']),
+         red_adc = first(champion[side_position == 'Red_bot']),
+         red_sup = first(champion[side_position == 'Red_sup']),
+         blue_team = first(teamname[side == 'Blue']),
+         red_team = first(teamname[side == 'Red']),
+         blue_ban1 = first(ban1[side == 'Blue']),
+         blue_ban2 = first(ban2[side == 'Blue']),
+         blue_ban3 = first(ban3[side == 'Blue']),
+         blue_ban4 = first(ban4[side == 'Blue']),
+         blue_ban5 = first(ban5[side == 'Blue']),
+         red_ban1 = first(ban1[side == 'Red']),
+         red_ban2 = first(ban2[side == 'Red']),
+         red_ban3 = first(ban3[side == 'Red']),
+         red_ban4 = first(ban4[side == 'Red']),
+         red_ban5 = first(ban5[side == 'Red']),
+         blue_pick1 = first(pick1[side == 'Blue']),
+         blue_pick2 = first(pick2[side == 'Blue']),
+         blue_pick3 = first(pick3[side == 'Blue']),
+         blue_pick4 = first(pick4[side == 'Blue']),
+         blue_pick5 = first(pick5[side == 'Blue']),
+         red_pick1 = first(pick1[side == 'Red']),
+         red_pick2 = first(pick2[side == 'Red']),
+         red_pick3 = first(pick3[side == 'Red']),
+         red_pick4 = first(pick4[side == 'Red']),
+         red_pick5 = first(pick5[side == 'Red']),
+         blue_top_player = first(playername[side_position == 'Blue_top']),
+         blue_jg_player = first(playername[side_position == 'Blue_jng']),
+         blue_mid_player = first(playername[side_position == 'Blue_mid']),
+         blue_adc_player = first(playername[side_position == 'Blue_bot']),
+         blue_sup_player = first(playername[side_position == 'Blue_sup']),
+         red_top_player = first(playername[side_position == 'Red_top']),
+         red_jg_player = first(playername[side_position == 'Red_jng']),
+         red_mid_player = first(playername[side_position == 'Red_mid']),
+         red_adc_player = first(playername[side_position == 'Red_bot']),
+         red_sup_player = first(playername[side_position == 'Red_sup']),
+         blue_top_golddiff15 = first(golddiffat15[side_position == 'Blue_top']),
+         blue_jg_golddiff15 = first(golddiffat15[side_position == 'Blue_jng']),
+         blue_mid_golddiff15 = first(golddiffat15[side_position == 'Blue_mid']),
+         blue_adc_golddiff15 = first(golddiffat15[side_position == 'Blue_bot']),
+         blue_sup_golddiff15 = first(golddiffat15[side_position == 'Blue_sup']),
+         red_top_golddiff15 = first(golddiffat15[side_position == 'Red_top']),
+         red_jg_golddiff15 = first(golddiffat15[side_position == 'Red_jng']),
+         red_mid_golddiff15 = first(golddiffat15[side_position == 'Red_mid']),
+         red_adc_golddiff15 = first(golddiffat15[side_position == 'Red_bot']),
+         red_sup_golddiff15 = first(golddiffat15[side_position == 'Red_sup']),
+         blue_top_golddiff10 = first(golddiffat10[side_position == 'Blue_top']),
+         blue_jg_golddiff10 = first(golddiffat10[side_position == 'Blue_jng']),
+         blue_mid_golddiff10 = first(golddiffat10[side_position == 'Blue_mid']),
+         blue_adc_golddiff10 = first(golddiffat10[side_position == 'Blue_bot']),
+         blue_sup_golddiff10 = first(golddiffat10[side_position == 'Blue_sup']),
+         red_top_golddiff10 = first(golddiffat10[side_position == 'Red_top']),
+         red_jg_golddiff10 = first(golddiffat10[side_position == 'Red_jng']),
+         red_mid_golddiff10 = first(golddiffat10[side_position == 'Red_mid']),
+         red_adc_golddiff10 = first(golddiffat10[side_position == 'Red_bot']),
+         red_sup_golddiff10 = first(golddiffat10[side_position == 'Red_sup']),
+         blue_topjg = paste(blue_top, blue_jg),
+         blue_midjg = paste(blue_mid, blue_jg),
+         blue_bot = paste(blue_adc, blue_sup),
+         blue_botjg = paste(blue_bot, blue_jg),
+         red_topjg = paste(red_top, red_jg),
+         red_midjg = paste(red_mid, red_jg),
+         red_bot = paste(red_adc, red_sup),
+         red_botjg = paste(red_bot, red_jg),
+         top_matchup = paste(blue_top, red_top),
+         jg_matchup = paste(blue_jg, red_jg),
+         mid_matchup = paste(blue_mid, red_mid),
+         bot_matchup = paste(blue_bot, red_bot),
+         blue_goldspent = first(goldspent[side_position == 'Blue_team']),
+         red_goldspent = first(goldspent[side_position == 'Red_team']),
+         goldspentdiff = ifelse(side == 'Blue', blue_goldspent-red_goldspent, red_goldspent- blue_goldspent))%>%
+  ungroup()%>%
+  filter(position =='team')%>%
+  select(-url, -datacompleteness, -participantid, -playername, -playerid, -teamid,
+    -position, -champion, -ban1, -ban2, -ban3, -ban4, -ban5, -pick1,
+    -pick2, -pick3, -pick4, -pick5, -firstbloodkill, -firstbloodassist,
+    -firstbloodvictim, -damageshare, -earnedgoldshare, -total.cs, -side_position)
+
+
+
+df%>%
+  select(goldspent, red_goldspent, blue_goldspent, side, gameid, goldspentdiff)
+```
+
+fix na missing values
+```{r}
+df$blue_ban4[is.na(df$blue_ban4)]<- 'no_ban'
+df$blue_ban5[is.na(df$blue_ban5)]<- 'no_ban'
+df$red_ban4[is.na(df$red_ban4)]<- 'no_ban'
+df$red_ban5[is.na(df$red_ban5)]<- 'no_ban'
+df$blue_pick1[is.na(df$blue_pick1)]<- 'no_ban'
+df$blue_pick2[is.na(df$blue_pick2)]<- 'no_ban'
+df$blue_pick3[is.na(df$blue_pick3)]<- 'no_ban'
+df$blue_pick4[is.na(df$blue_pick4)]<- 'no_ban'
+df$blue_pick5[is.na(df$blue_pick5)]<- 'no_ban'
+df$red_pick1[is.na(df$red_pick1)]<- 'no_ban'
+df$red_pick2[is.na(df$red_pick2)]<- 'no_ban'
+df$red_pick3[is.na(df$red_pick3)]<- 'no_ban'
+df$red_pick4[is.na(df$red_pick4)]<- 'no_ban'
+df$red_pick5[is.na(df$red_pick5)]<- 'no_ban'
+
+df <- replace(df, is.na(df), 0)
+
+```
+
+
+add variable called season using year- 2011, make it factor variable
+```{r}
+df<-df%>%
+  mutate(season = year-2011)
+```
+
+
+
+!!!summary statistics
+```{r}
+sumstats<-df %>%
+  mutate(gamelengthinm = gamelengthins/60)%>%
+  select("result", "percent_total_kpm", "dragons", "barons", "wpm", 
+         "firstmidtower", "firsttothreetowers", "towers", "inhibitors", 
+         "golddiffat10", "xpdiffat10", "golddiffat15", "xpdiffat15", 
+         "firstbaron", "firstdragon", "firstherald", "heralds", "void_grubs", 
+         "goldspentdiff", "gamelengthinm") %>%
+  pivot_longer(c("result", "percent_total_kpm", "dragons", "barons", "wpm", 
+         "firstmidtower", "firsttothreetowers", "towers", "inhibitors", 
+         "golddiffat15", 
+         "firstbaron", "firstdragon", "firstherald", "heralds", "void_grubs", 
+         "goldspentdiff", "gamelengthinm"))%>%
+  group_by(name)%>%
+  summarize(mean = mean(value, na.rm = TRUE), 
+            median = median(value, na.rm = TRUE),
+            sd = sd(value, na.rm = TRUE), 
+            min = min(value, na.rm = TRUE), 
+            max = max(value, na.rm = TRUE))
+
+stargazer(sumstats, type = "latex", summary = F)
+```
+
+EDA winrate of blue side vs win rate of blue side per major region (plot 1)
+```{r}
+plot1<- df %>%
+  filter(side == 'Blue') %>%
+  group_by(league, season) %>%
+  summarize(win_rate = mean(result)) %>%
+  filter(league %in% c('LCS', 'LEC', 'LPL', 'LCK')) %>%
+  ggplot(aes(x = as.numeric(season), y = win_rate, color = league)) +
+  geom_point()+
+  geom_line() +
+  geom_hline(yintercept = 0.5, linetype = "dashed", color = "red") +
+  scale_color_brewer(palette = "Set1") +
+  labs(x = "Season", y = "Win Rate", title = "Blue Side's Seasonal Win Rates Across Major Regions") +
+  theme_minimal() +
+  scale_y_continuous(labels = scales::percent) +
+  scale_x_continuous(breaks = seq(3, 14, by = 1))
+
+  ggsave('blue side win rate by major region.png', plot = plot1, width = 10, height = 10/1.618, dpi = 300)
+```
+Blue side has a slight advantage as it is consistently over 50% winrate
+
+EDA winrate of blue side overall (plot2)
+```{r}
+plot2<- df%>%
+  group_by(season, side)%>%
+  summarize(win_rate = mean(result))%>%
+  ggplot(aes(x = as.numeric(season), y= win_rate, color = side))+
+  geom_line()+
+  geom_hline(yintercept = 0.5, linetype = "dashed", color = "red") +
+  scale_color_brewer(palette = "Set1") +
+  labs(x = "Year", y = "Win Rate", title = "Blue Side's Overall Seasonal Win Rates") +
+  theme_minimal() +
+  scale_y_continuous(labels = scales::percent)+
+  scale_x_continuous(breaks = seq(3, 14, by = 1)) 
+
+ggsave('blue side win rate overall.png', plot = plot2, width = 10, height = 10/1.618, dpi = 300)
+  
+```
+
+EDA scatter plot, gold diff 10 with result (plot 3)
+```{r}
+plot3<- df%>%
+  ggplot(aes(x=golddiffat10, y=result))+
+  geom_point()+                               # Add points
+  theme_minimal() +                            # Use a minimal theme
+  labs(x = "Gold Difference at 10 Minutes",    # Customize X-axis label
+       y = "Result",                           # Customize Y-axis label
+       title = "Impact of Early-Game Gold Differences on Match Outcomes")  # Add a title
+
+ggsave('scatter win vs gold diff 10.png', plot = plot3, width = 10, height = 10/1.618, dpi = 300)
+```
+
+EDA scatter plot, gold diff 15 with result (plot 4)
+```{r}
+plot4<- df%>%
+  ggplot(aes(x=golddiffat15, y=result))+
+  geom_point()+                               # Add points
+  theme_minimal() +                            # Use a minimal theme
+  labs(x = "Gold Difference at 15 Minutes",    # Customize X-axis label
+       y = "Result",                           # Customize Y-axis label
+       title = "Impact of Mid-Game Gold Differences on Match Outcomes")  # Add a title
+
+ggsave('scatter win vs gold diff 15.png', plot = plot4, width = 10, height = 10/1.618, dpi = 300)
+```
+
+probability of winning when theres a gold lead at 10 and with gold lead at 15
+```{r}
+df%>%
+  filter(golddiffat10 > 0)%>%
+  summarise(mean(result))
+
+df%>%
+  filter(golddiffat15 > 0)%>%
+  summarise(mean(result))
+
+
+
+```
+
+
+EDA scatter plot, does gold diff at 10 lead to gold diff at 15 (plot 5)
+```{r}
+plot5<- df%>%
+  ggplot(aes(x=golddiffat10, y=golddiffat15))+
+  geom_point()+                               # Add points
+  theme_minimal() +                            # Use a minimal theme
+  labs(x = "Gold Difference at 10 Minutes",    # Customize X-axis label
+       y = "Gold difference at 15 Minutes",                           # Customize Y-axis label
+       title = "Scatter Plot of Gold Difference at 10 Minutes vs Gold Difference at 15 Minutes")  # Add a title
+
+ggsave('gold diff 10 vs 15.png', plot = plot5, width = 10, height = 10/1.618, dpi = 300)
+```
+
+EDA scatter plot, xp diff at 10 with result (plot 6)
+```{r}
+plot6<- df%>%
+  ggplot(aes(x=xpdiffat10, y=result))+
+  geom_point()+                               # Add points
+  theme_minimal() +                            # Use a minimal theme
+  labs(x = "Experience Difference at 10 Minutes",    # Customize X-axis label
+       y = "Result",                           # Customize Y-axis label
+       title = "Impact of Early Game Experience Differences on Match Results")  # Add a title
+
+ggsave('scatter win vs xp diff 10.png', plot = plot6, width = 10, height = 10/1.618, dpi = 300)
+```
+
+EDA scatter plot, xp diff at 15 with result (plot 7)
+```{r}
+plot7<- df%>%
+  ggplot(aes(x=xpdiffat15, y=result))+
+  geom_point()+                               # Add points
+  theme_minimal() +                            # Use a minimal theme
+  labs(x = "Experience Difference at 15 Minutes",    # Customize X-axis label
+       y = "Result",                           # Customize Y-axis label
+       title = "Impact of Mid Game Experience Differences on Match Results")  # Add a title
+
+ggsave('scatter win vs xp diff 15.png', plot = plot7, width = 10, height = 10/1.618, dpi = 300)
+```
+
+probability of winning given exp lead at 10 and 15
+```{r}
+df%>%
+  filter(xpdiffat10 > 0)%>%
+  summarise(mean(result))
+
+df%>%
+  filter(xpdiffat15 > 0)%>%
+  summarise(mean(result))
+```
+
+
+EDA scatter plot, does xp diff at 10 lead to xp diff at 15 (plot 8)
+```{r}
+plot8<- df%>%
+  ggplot(aes(x=xpdiffat10, y=xpdiffat15))+
+  geom_point()+                               # Add points
+  theme_minimal() +                            # Use a minimal theme
+  labs(x = "Experience Difference at 10 Minutes",    # Customize X-axis label
+       y = "Experience Difference at 15 Minutes",                           # Customize Y-axis label
+       title = "Scatter Plot of Experience Difference at 10 Minutes vs 15 Minutes")  # Add a title
+
+ggsave('scatter xpdiff 10 vs xpdiff 15.png', plot = plot8, width = 10, height = 10/1.618, dpi = 300)
+```
+
+EDA scatter plot, xp at 10 vs gold at 10 (plot 9)
+```{r}
+plot9<- df%>%
+  ggplot(aes(x=xpdiffat10, y=golddiffat10))+
+  geom_point()+                               # Add points
+  theme_minimal() +                            # Use a minimal theme
+  labs(x = "Experience Difference at 10 Minutes",    # Customize X-axis label
+       y = "Gold Difference at 10 Minutes",                           # Customize Y-axis label
+       title = "Correlations Between Gold and Experience Variations at 10 Minutes")  # Add a title
+
+ggsave('scatter xpdiff 10 vs golddiff 10.png', plot = plot9, width = 10, height = 10/1.618, dpi = 300)
+```
+
+average game length (plot 10)
+```{r}
+plot10<- df%>%
+  group_by(season)%>%
+  summarise(avg_gamelength = mean(gamelengthins/60))%>%
+  ggplot(aes(x = as.numeric(season), y= avg_gamelength))+
+  geom_point()+
+  geom_line()+
+  theme_minimal()+
+  labs(x = 'Season',
+       y = 'Average Game Length (Minutes)',
+       title = 'Seasonal Trends in Average Game Length')+
+  scale_x_continuous(breaks = seq(3, 14, by = 1))
+
+ggsave('Average game time.png', plot = plot10, width = 10, height = 10/1.618, dpi = 300)
+```
+
+average game length by major region (plot 11)
+```{r}
+plot11<- df%>%
+  filter(league %in% c('LCS', 'LEC', 'LPL', 'LCK'))%>%
+  group_by(season, league)%>%
+  summarise(avg_gamelength = mean(gamelengthins/60))%>%
+  ggplot(aes(x = as.numeric(season), y= avg_gamelength, color=league))+
+  geom_point()+
+  geom_line()+
+  theme_minimal()+
+  labs(x = 'Season',
+       y = 'Average Game Length (Minutes)',
+       title = 'Seasonal Trends in Game Duration Across Major Regions')+
+  scale_x_continuous(breaks = seq(3, 14, by = 1))
+
+ggsave('Average game time by league.png', plot = plot11, width = 10, height = 10/1.618, dpi = 300)
+```
+
+EDA whos more likely to get first dragon (plot 12) (slightly inaccurate data due to missing data)
+```{r}
+plot12 <- df%>%
+  select(firstdragon, side, season)%>%
+  group_by(side, season)%>%
+  summarize(firstdrag = mean(firstdragon))%>%
+  ggplot(aes(x = as.numeric(season), y = firstdrag, color = side))+
+  geom_point()+
+  geom_line()+
+  geom_hline(yintercept = 0.5, linetype = "dashed", color = "red") +
+  scale_color_brewer(palette = "Set1") +
+  theme_minimal()+
+  labs(x = 'Season',
+       y = 'First Dragon',
+       title = 'First Dragon Acquisition: Blue vs. Red Side Across Seasons')+
+  scale_x_continuous(breaks = seq(3, 14, by = 1))
+
+ggsave('first dragon by side.png', plot = plot12, width = 10, height = 10/1.618, dpi = 300)
+
+df%>%
+  filter(firstdragon == 1)%>%
+  summarize(mean(result, na.rm = T))
+```
+
+EDA whos more likely to get first dragon by league (plot 13)
+```{r}
+plot13 <- df%>%
+  select(firstdragon, side, season, league)%>%
+  filter(side =='Red')%>%
+  filter(league %in% c('LCS', 'LEC', 'LCK'))%>%
+  group_by(league, season)%>%
+  summarize(firstdrag = mean(firstdragon))%>%
+  ggplot(aes(x = as.numeric(season), y = firstdrag, color = league))+
+  geom_point()+
+  geom_line()+
+  geom_hline(yintercept = 0.5, linetype = "dashed", color = "red") +
+  scale_color_brewer(palette = "Set1") +
+  theme_minimal()+
+  labs(x = 'Season',
+       y = 'Frist Dragon',
+       title = 'Red Side Dominance: First Dragon Control by League')+
+  scale_x_continuous(breaks = seq(3, 14, by = 1))
+
+ggsave('Red Side first dragon by league.png', plot = plot13, width = 10, height = 10/1.618, dpi = 300)
+```
+
+EDA whos more likely to get first baron (plot 14)
+```{r}
+plot14 <- df%>%
+  select(firstbaron, side, season)%>%
+  group_by(side, season)%>%
+  summarize(firstbaron = mean(firstbaron))%>%
+  ggplot(aes(x = as.numeric(season), y = firstbaron, color = side))+
+  geom_point()+
+  geom_line()+
+  geom_hline(yintercept = 0.5, linetype = "dashed", color = "red") +
+  scale_color_brewer(palette = "Set1") +
+  theme_minimal()+
+  labs(x = 'Season',
+       y = 'First Baron',
+       title = 'First Baron Control: Blue vs. Red Side')+
+  scale_x_continuous(breaks = seq(3, 14, by = 1))
+
+ggsave('first baron by side.png', plot = plot14, width = 10, height = 10/1.618, dpi = 300)
+
+df%>%
+  filter(firstbaron == 1)%>%
+  summarise(mean(result,na.rm = T))
+```
+EDA whos more likely to get first baron by league (plot 15)
+```{r}
+plot15 <- df%>%
+  select(firstbaron, side, season, league)%>%
+  filter(league %in% c('LCS', 'LEC', 'LCK'))%>%
+  filter(side == 'Blue')%>%
+  group_by(league, season)%>%
+  summarize(firstbaron = mean(firstbaron))%>%
+  ggplot(aes(x = as.numeric(season), y = firstbaron, color = league))+
+  geom_point()+
+  geom_line()+
+  geom_hline(yintercept = 0.5, linetype = "dashed", color = "red") +
+  scale_color_brewer(palette = "Set1") +
+  theme_minimal()+
+  labs(x = 'Season',
+       y = 'Frist Baron',
+       title = "Blue Side's First Baron Control by League")+
+  scale_x_continuous(breaks = seq(3, 14, by = 1))
+
+ggsave('Blue Side first baron by league.png', plot = plot15, width = 10, height = 10/1.618, dpi = 300)
+```
+
+EDA whos more likely to get first mid turret (plot 16)
+```{r}
+plot16 <- df%>%
+  select(firstmidtower, side, season)%>%
+  group_by(side, season)%>%
+  summarize(first = mean(firstmidtower))%>%
+  ggplot(aes(x = as.numeric(season), y = first, color = side))+
+  geom_point()+
+  geom_line()+
+  geom_hline(yintercept = 0.5, linetype = "dashed", color = "red") +
+  scale_color_brewer(palette = "Set1") +
+  theme_minimal()+
+  labs(x = 'Season',
+       y = 'First Turret',
+       title = 'Side Comparison: First Mid Tower Acquisition')+
+  scale_x_continuous(breaks = seq(3, 14, by = 1))
+
+ggsave('first mid turret by side.png', plot = plot16, width = 10, height = 10/1.618, dpi = 300)
+```
+
+EDA whos more likely to get first mid turret by league (plot 17)
+```{r}
+plot17 <- df%>%
+  select(firstmidtower, side, season, league)%>%
+  filter(league %in% c('LCS', 'LEC', 'LCK'))%>%
+  filter(side == 'Blue')%>%
+  group_by(league, season)%>%
+  summarize(first = mean(firstmidtower))%>%
+  ggplot(aes(x = as.numeric(season), y = first, color = league))+
+  geom_point()+
+  geom_line()+
+  geom_hline(yintercept = 0.5, linetype = "dashed", color = "red") +
+  scale_color_brewer(palette = "Set1") +
+  theme_minimal()+
+  labs(x = 'Season',
+       y = 'Frist Mid Tower',
+       title = 'Blue Side Dominance: First Mid Tower by League')+
+  scale_x_continuous(breaks = seq(3, 14, by = 1))
+
+ggsave('Blue Side first mid tower by league.png', plot = plot17, width = 10, height = 10/1.618, dpi = 300)
+```
+
+
+EDA whos more likely to get first herald (plot 18)
+```{r}
+plot18 <- df%>%
+  group_by(side, season)%>%
+  filter(season>4)%>%
+  summarize(first = mean(firstherald))%>%
+  ggplot(aes(x = as.numeric(season), y = first, color = side))+
+  geom_point()+
+  geom_line()+
+  geom_hline(yintercept = 0.5, linetype = "dashed", color = "red") +
+  scale_color_brewer(palette = "Set1") +
+  theme_minimal()+
+  labs(x = 'Season',
+       y = 'First Herald',
+       title = 'Early Advantage: First Herald by Side')+
+  scale_x_continuous(breaks = seq(3, 14, by = 1))
+
+ggsave('first herald by side.png', plot = plot18, width = 10, height = 10/1.618, dpi = 300)
+
+df%>%
+  filter(firstherald == 1)%>%
+  summarise(mean(result, na.rm = T))
+```
+
+EDA whos more likely to get first herald by league (plot 19)
+```{r}
+plot19 <- df%>%
+  filter(league %in% c('LCS', 'LEC', 'LCK'))%>%
+  filter(side == 'Blue')%>%
+  filter(season>4)%>%
+  group_by(league, season, side)%>%
+  summarize(first = mean(firstherald))%>%
+  ggplot(aes(x = as.numeric(season), y = first, color = league))+
+  geom_point()+
+  geom_line()+
+  geom_hline(yintercept = 0.5, linetype = "dashed", color = "red") +
+  scale_color_brewer(palette = "Set1") +
+  theme_minimal()+
+  labs(x = 'Season',
+       y = 'Frist herald',
+       title = 'Blue Dominance: First Herald by League')+
+  scale_x_continuous(breaks = seq(3, 14, by = 1))
+
+ggsave('Blue Side first herald by league.png', plot = plot19, width = 10, height = 10/1.618, dpi = 300)
+```
+
+free up memory by removing plots
+```{r}
+# Generate plot names from plot1 to plot19
+plot_names <- paste("plot", 1:19, sep="")
+
+# Remove these plot variables from the workspace
+rm(list=plot_names)
+```
+
+
+make season a factor variable
+```{r}
+df$season<-as.factor(df$season)
+```
+
+subset data into testing and training
+```{r}
+# Set the seed for reproducibility
+set.seed(123)
+
+# Split the data into training and testing sets
+train_index <- createDataPartition(df$result, p = 0.8, list = FALSE)
+train_data <- df[train_index, ]
+test_data <- df[-train_index, ]
+```
+
+
+
+logit with only macro variables basic model (all vars)(logit model 1) and confusion matrix (multicolinearity could be an issue)
+```{r}
+lmodel1 <- glm(result ~ side + percent_total_kpm + dragons + dragons:I(gamelengthins/60) + barons + barons:I(gamelengthins/60) + wpm + firstmidtower + firsttothreetowers + towers + inhibitors + golddiffat15 + firstbaron + firstdragon + firstherald + heralds + void_grubs + goldspentdiff + firstblood + firstbaron:firstdragon, data = train_data, family = binomial(link = "logit"))
+
+summary(lmodel1)
+pR2(lmodel1) 
+
+
+# Compute correlation matrix for logistic regression model
+correlation_matrix1 <- cor(df[c("result", "percent_total_kpm", "dragons", "barons", "wpm", 
+                       "firstmidtower", "firsttothreetowers", "towers", "inhibitors", 
+                       "golddiffat15", 
+                       "firstbaron", "firstdragon", "firstherald", "heralds", "void_grubs", "goldspentdiff")])
+correlation_matrix1
+vif(lmodel1)
+
+#confusion matrix
+# Get the predicted probabilities from the logistic regression model
+predicted_probs <- predict(lmodel1, test_data ,type = "response")
+
+# Convert probabilities to binary predictions based on a threshold (e.g., 0.5)
+predicted_labels <- ifelse(predicted_probs > 0.5, 1, 0)
+
+# Create the confusion matrix
+conf_matrix <- confusionMatrix(data = as.factor(predicted_labels), reference = as.factor(test_data$result))
+
+#confusion matrix
+# Get the predicted probabilities from the logistic regression model
+predicted_probs <- predict(lmodel1, test_data ,type = "response")
+
+# Convert probabilities to binary predictions based on a threshold (e.g., 0.5)
+predicted_labels <- ifelse(predicted_probs > 0.5, 1, 0)
+
+# Create the confusion matrix
+conf_matrix <- confusionMatrix(data = as.factor(predicted_labels), reference = as.factor(test_data$result))
+conf_matrix
+```
+
+logit model 2 (late game metrics)
+```{r}
+lmodel2 <- glm(result ~ side + percent_total_kpm + dragons + dragons:I(gamelengthins/60) + barons+ barons:I(gamelengthins/60) + wpm + towers + inhibitors + golddiffat15 + heralds + void_grubs + goldspentdiff, data = train_data, family = binomial(link = "logit"))
+
+summary(lmodel2)
+pR2(lmodel2)
+
+#confusion matrix
+# Get the predicted probabilities from the logistic regression model
+predicted_probs <- predict(lmodel2, test_data ,type = "response")
+
+# Convert probabilities to binary predictions based on a threshold (e.g., 0.5)
+predicted_labels <- ifelse(predicted_probs > 0.5, 1, 0)
+
+# Create the confusion matrix
+conf_matrix <- confusionMatrix(data = as.factor(predicted_labels), reference = as.factor(test_data$result))
+
+#confusion matrix
+# Get the predicted probabilities from the logistic regression model
+predicted_probs <- predict(lmodel2, test_data ,type = "response")
+
+# Convert probabilities to binary predictions based on a threshold (e.g., 0.5)
+predicted_labels <- ifelse(predicted_probs > 0.5, 1, 0)
+
+# Create the confusion matrix
+conf_matrix <- confusionMatrix(data = as.factor(predicted_labels), reference = as.factor(test_data$result))
+conf_matrix
+```
+
+
+logit model 3 early game (pre 20 minutes metrics)
+```{r}
+lmodel3 <- glm(result ~  side + percent_total_kpm + firstbaron + firsttothreetowers + firstmidtower + golddiffat15 +firstdragon + firstdragon:firstbaron + heralds + void_grubs + firstblood, data = train_data, family = binomial(link = "logit"))
+
+summary(lmodel3)
+pR2(lmodel3)
+
+
+#confusion matrix
+# Get the predicted probabilities from the logistic regression model
+predicted_probs <- predict(lmodel3, test_data ,type = "response")
+
+# Convert probabilities to binary predictions based on a threshold (e.g., 0.5)
+predicted_labels <- ifelse(predicted_probs > 0.5, 1, 0)
+
+# Create the confusion matrix
+conf_matrix <- confusionMatrix(data = as.factor(predicted_labels), reference = as.factor(test_data$result))
+
+#confusion matrix
+# Get the predicted probabilities from the logistic regression model
+predicted_probs <- predict(lmodel3, test_data ,type = "response")
+
+# Convert probabilities to binary predictions based on a threshold (e.g., 0.5)
+predicted_labels <- ifelse(predicted_probs > 0.5, 1, 0)
+
+# Create the confusion matrix
+conf_matrix <- confusionMatrix(data = as.factor(predicted_labels), reference = as.factor(test_data$result))
+conf_matrix
+```
+
+logit model 4 (model 1 for games shorter than 35 minutes)
+```{r}
+lmodel4 <- glm(result ~ side + percent_total_kpm + dragons + dragons:I(gamelengthins/60) + barons + barons:I(gamelengthins/60) + wpm + firstmidtower + firsttothreetowers + towers + inhibitors + golddiffat15 + firstbaron + firstdragon + firstherald + heralds + void_grubs + goldspentdiff + firstblood + firstbaron:firstdragon, data = train_data%>%filter(gamelengthins<2100), family = binomial(link = "logit"))
+
+summary(lmodel4)
+pR2(lmodel4)
+
+```
+
+logit model 5 (model 1 for games longer than 35 minutes)
+```{r}
+lmodel5 <- glm(result ~ side + percent_total_kpm + dragons + dragons:I(gamelengthins/60) + barons + barons:I(gamelengthins/60) + wpm + firstmidtower + firsttothreetowers + towers + inhibitors + golddiffat15 + firstbaron + firstdragon + firstherald + heralds + void_grubs + goldspentdiff + firstblood + firstbaron:firstdragon, data = train_data%>%filter(gamelengthins>=2100), family = binomial(link = "logit"))
+
+summary(lmodel5)
+pR2(lmodel5)
+
+```
+this shows that the result of longer games are harder to predict
+
+logit model 6 (model 2 for games shorter than 35 minutes)
+```{r}
+lmodel6 <- glm(result ~ side + percent_total_kpm + dragons + dragons:I(gamelengthins/60) + barons+ barons:I(gamelengthins/60) + wpm + towers + inhibitors + golddiffat15 + heralds + void_grubs + goldspentdiff, data = train_data%>%filter(gamelengthins<2100), family = binomial(link = "logit"))
+
+summary(lmodel6)
+pR2(lmodel6)
+```
+
+logit model 7 (model 2 for games longer than 35 minutes)
+```{r}
+lmodel7 <- glm(result ~ side + percent_total_kpm + dragons + dragons:I(gamelengthins/60) + barons+ barons:I(gamelengthins/60) + wpm + towers + inhibitors + golddiffat15 + heralds + void_grubs + goldspentdiff, data = train_data%>%filter(gamelengthins>=2100), family = binomial(link = "logit"))
+
+summary(lmodel7)
+pR2(lmodel7)
+```
+
+logit model 8 (l model 3 for games shorter than 35 mins)
+```{r}
+lmodel8 <- glm(result ~  side + percent_total_kpm + firstbaron + firsttothreetowers + firstmidtower + golddiffat15 +firstdragon + firstdragon:firstbaron + heralds + void_grubs + firstblood, data = train_data%>%filter(gamelengthins<2100), family = binomial(link = "logit"))
+
+summary(lmodel8)
+pR2(lmodel8)
+```
+
+logit model 9 (l model 3 for games longer than 35 mins)
+```{r}
+lmodel9 <- glm(result ~  side + percent_total_kpm + firstbaron + firsttothreetowers + firstmidtower + golddiffat15 +firstdragon + firstdragon:firstbaron + heralds + void_grubs + firstblood, data = train_data%>%filter(gamelengthins>=2100), family = binomial(link = "logit"))
+
+summary(lmodel9)
+pR2(lmodel9)
+```
+
+logit model 10 (logit model 1 by season, season 3)
+```{r}
+lmodel10 <- glm(result ~ side + percent_total_kpm + dragons + dragons:I(gamelengthins/60) + barons + barons:I(gamelengthins/60) + wpm + firstmidtower + firsttothreetowers + towers + inhibitors + golddiffat15 + firstbaron + firstdragon + firstherald + heralds + void_grubs + goldspentdiff + firstblood + firstbaron:firstdragon, data = train_data%>%filter(season == 3), family = binomial(link = "logit"))
+
+summary(lmodel10)
+pR2(lmodel10) 
+```
+
+logit model 11 (logit model 1 by season, season 4)
+```{r}
+lmodel11 <- glm(result ~ side + percent_total_kpm + dragons + dragons:I(gamelengthins/60) + barons + barons:I(gamelengthins/60) + wpm + firstmidtower + firsttothreetowers + towers + inhibitors + golddiffat15 + firstbaron + firstdragon + firstherald + heralds + void_grubs + goldspentdiff + firstblood + firstbaron:firstdragon, data = train_data%>%filter(season == 4), family = binomial(link = "logit"))
+
+summary(lmodel11)
+pR2(lmodel11) 
+```
+
+logit model 12 (logit model 1 by season, season 5)
+```{r}
+lmodel12 <- glm(result ~ side + percent_total_kpm + dragons + dragons:I(gamelengthins/60) + barons + barons:I(gamelengthins/60) + wpm + firstmidtower + firsttothreetowers + towers + inhibitors + golddiffat15 + firstbaron + firstdragon + firstherald + heralds + void_grubs + goldspentdiff + firstblood + firstbaron:firstdragon, data = train_data%>%filter(season == 5), family = binomial(link = "logit"))
+
+summary(lmodel12)
+pR2(lmodel12) 
+```
+
+logit model 13 (logit model 1 by season, season 6)
+```{r}
+lmodel13 <- glm(result ~ side + percent_total_kpm + dragons + dragons:I(gamelengthins/60) + barons + barons:I(gamelengthins/60) + wpm + firstmidtower + firsttothreetowers + towers + inhibitors + golddiffat15 + firstbaron + firstdragon + firstherald + heralds + void_grubs + goldspentdiff + firstblood + firstbaron:firstdragon, data = train_data%>%filter(season == 6), family = binomial(link = "logit"))
+
+summary(lmodel13)
+pR2(lmodel13) 
+```
+
+logit model 14 (logit model 1 by season, season 7)
+```{r}
+lmodel14 <- glm(result ~ side + percent_total_kpm + dragons + dragons:I(gamelengthins/60) + barons + barons:I(gamelengthins/60) + wpm + firstmidtower + firsttothreetowers + towers + inhibitors + golddiffat15 + firstbaron + firstdragon + firstherald + heralds + void_grubs + goldspentdiff + firstblood + firstbaron:firstdragon, data = train_data%>%filter(season == 7), family = binomial(link = "logit"))
+
+summary(lmodel14)
+pR2(lmodel14) 
+```
+
+logit model 15 (logit model 1 by season, season 8)
+```{r}
+lmodel15 <- glm(result ~ side + percent_total_kpm + dragons + dragons:I(gamelengthins/60) + barons + barons:I(gamelengthins/60) + wpm + firstmidtower + firsttothreetowers + towers + inhibitors + golddiffat15 + firstbaron + firstdragon + firstherald + heralds + void_grubs + goldspentdiff + firstblood + firstbaron:firstdragon, data = train_data%>%filter(season == 8), family = binomial(link = "logit"))
+
+summary(lmodel15)
+pR2(lmodel15) 
+```
+
+logit model 16 (logit model 1 by season, season 9)
+```{r}
+lmodel16 <- glm(result ~ side + percent_total_kpm + dragons + dragons:I(gamelengthins/60) + barons + barons:I(gamelengthins/60) + wpm + firstmidtower + firsttothreetowers + towers + inhibitors + golddiffat15 + firstbaron + firstdragon + firstherald + heralds + void_grubs + goldspentdiff + firstblood + firstbaron:firstdragon, data = train_data%>%filter(season == 9), family = binomial(link = "logit"))
+
+summary(lmodel16)
+pR2(lmodel16) 
+```
+
+logit model 17 (logit model 1 by season, season 10)
+```{r}
+lmodel17 <- glm(result ~ side + percent_total_kpm + dragons + dragons:I(gamelengthins/60) + barons + barons:I(gamelengthins/60) + wpm + firstmidtower + firsttothreetowers + towers + inhibitors + golddiffat15 + firstbaron + firstdragon + firstherald + heralds + void_grubs + goldspentdiff + firstblood + firstbaron:firstdragon, data = train_data%>%filter(season == 10), family = binomial(link = "logit"))
+
+summary(lmodel17)
+pR2(lmodel17) 
+```
+
+logit model 18 (logit model 1 by season, season 11)
+```{r}
+lmodel18 <- glm(result ~ side + percent_total_kpm + dragons + dragons:I(gamelengthins/60) + barons + barons:I(gamelengthins/60) + wpm + firstmidtower + firsttothreetowers + towers + inhibitors + golddiffat15 + firstbaron + firstdragon + firstherald + heralds + void_grubs + goldspentdiff + firstblood + firstbaron:firstdragon, data = train_data%>%filter(season == 11), family = binomial(link = "logit"))
+
+summary(lmodel18)
+pR2(lmodel18) 
+```
+
+logit model 19 (logit model 1 by season, season 12)
+```{r}
+lmodel19 <- glm(result ~ side + percent_total_kpm + dragons + dragons:I(gamelengthins/60) + barons + barons:I(gamelengthins/60) + wpm + firstmidtower + firsttothreetowers + towers + inhibitors + golddiffat15 + firstbaron + firstdragon + firstherald + heralds + void_grubs + goldspentdiff + firstblood + firstbaron:firstdragon, data = train_data%>%filter(season == 12), family = binomial(link = "logit"))
+
+summary(lmodel19)
+pR2(lmodel19) 
+```
+
+
+
+logit model 20 (logit model 1 by season, season 13)
+```{r}
+lmodel20 <- glm(result ~ side + percent_total_kpm + dragons + dragons:I(gamelengthins/60) + barons + barons:I(gamelengthins/60) + wpm + firstmidtower + firsttothreetowers + towers + inhibitors + golddiffat15 + firstbaron + firstdragon + firstherald + heralds + void_grubs + goldspentdiff + firstblood + firstbaron:firstdragon, data = train_data%>%filter(season == 13), family = binomial(link = "logit"))
+
+summary(lmodel20)
+pR2(lmodel20) 
+```
+
+logit model 21 (logit model 1 by major region, lcs)
+```{r}
+lmodel21 <- glm(result ~ side + percent_total_kpm + dragons + dragons:I(gamelengthins/60) + barons + barons:I(gamelengthins/60) + wpm + firstmidtower + firsttothreetowers + towers + inhibitors + golddiffat15 + firstbaron + firstdragon + firstherald + heralds + void_grubs + goldspentdiff + firstblood + firstbaron:firstdragon, data = train_data%>%filter(league == 'LCS'), family = binomial(link = "logit"))
+
+summary(lmodel21)
+pR2(lmodel21) 
+```
+
+logit model 22 (logit model 1 by major region, lck)
+```{r}
+lmodel22 <- glm(result ~ side + percent_total_kpm + dragons + dragons:I(gamelengthins/60) + barons + barons:I(gamelengthins/60) + wpm + firstmidtower + firsttothreetowers + towers + inhibitors + golddiffat15 + firstbaron + firstdragon + firstherald + heralds + void_grubs + goldspentdiff + firstblood + firstbaron:firstdragon, data = train_data%>%filter(league == 'LCK'), family = binomial(link = "logit"))
+
+summary(lmodel22)
+pR2(lmodel22) 
+```
+
+logit model 23 (logit model 1 by major region, lec)
+```{r}
+lmodel23 <- glm(result ~ side + percent_total_kpm + dragons + dragons:I(gamelengthins/60) + barons + barons:I(gamelengthins/60) + wpm + firstmidtower + firsttothreetowers + towers + inhibitors + golddiffat15 + firstbaron + firstdragon + firstherald + heralds + void_grubs + goldspentdiff + firstblood + firstbaron:firstdragon, data = train_data%>%filter(league == 'LEC'), family = binomial(link = "logit"))
+
+summary(lmodel23)
+pR2(lmodel23) 
+```
+
+logit model 24 (logit model 1 by major region, lpl)
+```{r}
+lmodel24 <- glm(result ~ side + percent_total_kpm + dragons + dragons:I(gamelengthins/60) + barons + barons:I(gamelengthins/60) + wpm + firstmidtower + firsttothreetowers + towers + inhibitors + golddiffat15 + firstbaron + firstdragon + firstherald + heralds + void_grubs + goldspentdiff + firstblood + firstbaron:firstdragon, data = train_data%>%filter(league == 'LPL'), family = binomial(link = "logit"))
+
+summary(lmodel24)
+pR2(lmodel24) 
+```
+
+logit model 25 (logit model 1 by game length <30 mins)
+```{r}
+lmodel25 <- glm(result ~ side + percent_total_kpm + dragons + dragons:I(gamelengthins/60) + barons + barons:I(gamelengthins/60) + wpm + firstmidtower + firsttothreetowers + towers + inhibitors + golddiffat15 + firstbaron + firstdragon + firstherald + heralds + void_grubs + goldspentdiff + firstblood + firstbaron:firstdragon, data = train_data%>%filter(gamelengthins < 1800), family = binomial(link = "logit"))
+
+summary(lmodel25)
+pR2(lmodel25) 
+```
+
+logit model 26 (logit model 1 by game length <40, >30 mins)
+```{r}
+lmodel26 <- glm(result ~ side + percent_total_kpm + dragons + dragons:I(gamelengthins/60) + barons + barons:I(gamelengthins/60) + wpm + firstmidtower + firsttothreetowers + towers + inhibitors + golddiffat15 + firstbaron + firstdragon + firstherald + heralds + void_grubs + goldspentdiff + firstblood + firstbaron:firstdragon, data = train_data%>%filter(gamelengthins < 2400)%>% filter(gamelengthins >= 1800), family = binomial(link = "logit"))
+
+summary(lmodel26)
+pR2(lmodel26) 
+```
+
+logit model 27 (logit model 1 by game length >40)
+```{r}
+lmodel27 <- glm(result ~ side + percent_total_kpm + dragons + dragons:I(gamelengthins/60) + barons + barons:I(gamelengthins/60) + wpm + firstmidtower + firsttothreetowers + towers + inhibitors + golddiffat15 + firstbaron + firstdragon + firstherald + heralds + void_grubs + goldspentdiff + firstblood + firstbaron:firstdragon, data = train_data%>%filter(gamelengthins >= 2400), family = binomial(link = "logit"))
+
+summary(lmodel27)
+pR2(lmodel27) 
+
+stargazer(lmodel25, lmodel26, lmodel27)
+```
+
+Marginal effects for percent total kpm
+```{r}
+testdat1 <- data.frame(side = 'Blue', 
+                         percent_total_kpm = seq(0, 1, by=0.05),
+                         dragons = mean(df$dragons, na.rm = T),
+                         barons = mean(df$barons, na.rm = T),
+                         wpm = mean(df$wpm, na.rm = T),
+                         firstmidtower = mean(df$firstmidtower, na.rm = T),
+                         firsttothreetowers = mean(df$firstmidtower, na.rm = T),
+                         towers = mean(df$towers, na.rm = T),
+                         inhibitors = mean(df$inhibitors, na.rm = T),
+                         golddiffat15 = mean(df$goldat15, na.rm = T),
+                         firstbaron = mean(df$firstbaron, na.rm = T),
+                         firstdragon = mean(df$firstdragon, na.rm = T),
+                         firstherald = mean(df$firstherald, na.rm = T),
+                         heralds = mean(df$heralds, na.rm = T),
+                         void_grubs = mean(df$void_grubs, na.rm = T),
+                         goldspentdiff = mean(df$goldspentdiff, na.rm = T),
+                         firstblood = mean(df$firstblood, na.rm = T),
+                         gamelengthins = 25*60)
+
+testdat1$result  <- predict(lmodel1,  testdat1 ,type = "response")
+
+testdat2 <- data.frame(side = 'Blue', 
+                         percent_total_kpm = seq(0, 1, by=0.05),
+                         dragons = mean(df$dragons, na.rm = T),
+                         barons = mean(df$barons, na.rm = T),
+                         wpm = mean(df$wpm, na.rm = T),
+                         firstmidtower = mean(df$firstmidtower, na.rm = T),
+                         firsttothreetowers = mean(df$firstmidtower, na.rm = T),
+                         towers = mean(df$towers, na.rm = T),
+                         inhibitors = mean(df$inhibitors, na.rm = T),
+                         golddiffat15 = mean(df$goldat15, na.rm = T),
+                         firstbaron = mean(df$firstbaron, na.rm = T),
+                         firstdragon = mean(df$firstdragon, na.rm = T),
+                         firstherald = mean(df$firstherald, na.rm = T),
+                         heralds = mean(df$heralds, na.rm = T),
+                         void_grubs = mean(df$void_grubs, na.rm = T),
+                         goldspentdiff = mean(df$goldspentdiff, na.rm = T),
+                         firstblood = mean(df$firstblood, na.rm = T),
+                         gamelengthins = 35*60)
+
+testdat2$result  <- predict(lmodel1,  testdat2 ,type = "response")
+
+testdat3 <- data.frame(side = 'Blue', 
+                         percent_total_kpm = seq(0, 1, by=0.05),
+                         dragons = mean(df$dragons, na.rm = T),
+                         barons = mean(df$barons, na.rm = T),
+                         wpm = mean(df$wpm, na.rm = T),
+                         firstmidtower = mean(df$firstmidtower, na.rm = T),
+                         firsttothreetowers = mean(df$firstmidtower, na.rm = T),
+                         towers = mean(df$towers, na.rm = T),
+                         inhibitors = mean(df$inhibitors, na.rm = T),
+                         golddiffat15 = mean(df$goldat15, na.rm = T),
+                         firstbaron = mean(df$firstbaron, na.rm = T),
+                         firstdragon = mean(df$firstdragon, na.rm = T),
+                         firstherald = mean(df$firstherald, na.rm = T),
+                         heralds = mean(df$heralds, na.rm = T),
+                         void_grubs = mean(df$void_grubs, na.rm = T),
+                         goldspentdiff = mean(df$goldspentdiff, na.rm = T),
+                         firstblood = mean(df$firstblood, na.rm = T),
+                         gamelengthins = 45*60)
+
+testdat3$result  <- predict(lmodel1,  testdat3 ,type = "response")
+
+
+
+testdat <- rbind(testdat1, testdat2, testdat3)
+
+plot <- testdat %>%
+  ggplot(aes(x = percent_total_kpm, y = result, color = as.factor(gamelengthins/60), shape = as.factor(gamelengthins/60))) +
+  geom_point() +
+  geom_line() +
+  theme_minimal() +
+  labs(
+    title = "Marginal Effects of Kill Share by Game Duration ",
+    x = "Percent Total KPM",
+    y = "Probability of Win",
+    color = "Game Length (m)",
+    shape = "Game Length (m)"
+  )
+
+plot
+
+ggsave('marginal effects kill share.png', plot = plot, width = 10, height = 10/1.618, dpi = 300)
+
+```
+
+Marginal effects for dragons
+```{r}
+testdat1 <- data.frame(side = 'Blue', 
+                         percent_total_kpm = mean(df$percent_total_kpm, na.rm = T),
+                         dragons = min(df$dragons):max(df$dragons),
+                         barons = mean(df$barons, na.rm = T),
+                         wpm = mean(df$wpm, na.rm = T),
+                         firstmidtower = mean(df$firstmidtower, na.rm = T),
+                         firsttothreetowers = mean(df$firstmidtower, na.rm = T),
+                         towers = mean(df$towers, na.rm = T),
+                         inhibitors = mean(df$inhibitors, na.rm = T),
+                         golddiffat15 = mean(df$goldat15, na.rm = T),
+                         firstbaron = mean(df$firstbaron, na.rm = T),
+                         firstdragon = mean(df$firstdragon, na.rm = T),
+                         firstherald = mean(df$firstherald, na.rm = T),
+                         heralds = mean(df$heralds, na.rm = T),
+                         void_grubs = mean(df$void_grubs, na.rm = T),
+                         goldspentdiff = mean(df$goldspentdiff, na.rm = T),
+                         firstblood = mean(df$firstblood, na.rm = T),
+                         gamelengthins = 25*60)
+
+testdat1$result  <- predict(lmodel1,  testdat1 ,type = "response")
+
+testdat2 <- data.frame(side = 'Blue', 
+                         percent_total_kpm = mean(df$percent_total_kpm, na.rm = T),
+                         dragons = min(df$dragons):max(df$dragons),
+                         barons = mean(df$barons, na.rm = T),
+                         wpm = mean(df$wpm, na.rm = T),
+                         firstmidtower = mean(df$firstmidtower, na.rm = T),
+                         firsttothreetowers = mean(df$firstmidtower, na.rm = T),
+                         towers = mean(df$towers, na.rm = T),
+                         inhibitors = mean(df$inhibitors, na.rm = T),
+                         golddiffat15 = mean(df$goldat15, na.rm = T),
+                         firstbaron = mean(df$firstbaron, na.rm = T),
+                         firstdragon = mean(df$firstdragon, na.rm = T),
+                         firstherald = mean(df$firstherald, na.rm = T),
+                         heralds = mean(df$heralds, na.rm = T),
+                         void_grubs = mean(df$void_grubs, na.rm = T),
+                         goldspentdiff = mean(df$goldspentdiff, na.rm = T),
+                         firstblood = mean(df$firstblood, na.rm = T),
+                         gamelengthins = 35*60)
+
+testdat2$result  <- predict(lmodel1,  testdat2 ,type = "response")
+
+testdat3 <- data.frame(side = 'Blue', 
+                         percent_total_kpm = mean(df$percent_total_kpm, na.rm = T),
+                         dragons = min(df$dragons):max(df$dragons),
+                         barons = mean(df$barons, na.rm = T),
+                         wpm = mean(df$wpm, na.rm = T),
+                         firstmidtower = mean(df$firstmidtower, na.rm = T),
+                         firsttothreetowers = mean(df$firstmidtower, na.rm = T),
+                         towers = mean(df$towers, na.rm = T),
+                         inhibitors = mean(df$inhibitors, na.rm = T),
+                         golddiffat15 = mean(df$goldat15, na.rm = T),
+                         firstbaron = mean(df$firstbaron, na.rm = T),
+                         firstdragon = mean(df$firstdragon, na.rm = T),
+                         firstherald = mean(df$firstherald, na.rm = T),
+                         heralds = mean(df$heralds, na.rm = T),
+                         void_grubs = mean(df$void_grubs, na.rm = T),
+                         goldspentdiff = mean(df$goldspentdiff, na.rm = T),
+                         firstblood = mean(df$firstblood, na.rm = T),
+                         gamelengthins = 45*60)
+
+testdat3$result  <- predict(lmodel1,  testdat3 ,type = "response")
+
+
+
+testdat <- rbind(testdat1, testdat2, testdat3)
+
+plot <- testdat %>%
+  ggplot(aes(x = dragons, y = result, color = as.factor(gamelengthins/60), shape = as.factor(gamelengthins/60))) +
+  geom_point() +
+  geom_line() +
+  theme_minimal() +
+  labs(
+    title = "Marginal Effects of Dragons by Game Duration ",
+    x = "Dragons",
+    y = "Probability of Win",
+    color = "Game Length (m)",
+    shape = "Game Length (m)"
+  )
+
+plot
+
+ggsave('marginal effects Dragons.png', plot = plot, width = 10, height = 10/1.618, dpi = 300)
+
+```
+
+Marginal effects for barons
+```{r}
+testdat1 <- data.frame(side = 'Blue', 
+                         percent_total_kpm = mean(df$percent_total_kpm, na.rm = T),
+                         dragons = mean(df$dragons, na.rm = T),
+                         barons = min(df$barons):max(df$barons),
+                         wpm = mean(df$wpm, na.rm = T),
+                         firstmidtower = mean(df$firstmidtower, na.rm = T),
+                         firsttothreetowers = mean(df$firstmidtower, na.rm = T),
+                         towers = mean(df$towers, na.rm = T),
+                         inhibitors = mean(df$inhibitors, na.rm = T),
+                         golddiffat15 = mean(df$goldat15, na.rm = T),
+                         firstbaron = mean(df$firstbaron, na.rm = T),
+                         firstdragon = mean(df$firstdragon, na.rm = T),
+                         firstherald = mean(df$firstherald, na.rm = T),
+                         heralds = mean(df$heralds, na.rm = T),
+                         void_grubs = mean(df$void_grubs, na.rm = T),
+                         goldspentdiff = mean(df$goldspentdiff, na.rm = T),
+                         firstblood = mean(df$firstblood, na.rm = T),
+                         gamelengthins = 25*60)
+
+testdat1$result  <- predict(lmodel1,  testdat1 ,type = "response")
+
+testdat2 <- data.frame(side = 'Blue', 
+                         percent_total_kpm = mean(df$percent_total_kpm, na.rm = T),
+                         dragons = mean(df$dragons, na.rm = T),
+                         barons = min(df$barons):max(df$barons),
+                         wpm = mean(df$wpm, na.rm = T),
+                         firstmidtower = mean(df$firstmidtower, na.rm = T),
+                         firsttothreetowers = mean(df$firstmidtower, na.rm = T),
+                         towers = mean(df$towers, na.rm = T),
+                         inhibitors = mean(df$inhibitors, na.rm = T),
+                         golddiffat15 = mean(df$goldat15, na.rm = T),
+                         firstbaron = mean(df$firstbaron, na.rm = T),
+                         firstdragon = mean(df$firstdragon, na.rm = T),
+                         firstherald = mean(df$firstherald, na.rm = T),
+                         heralds = mean(df$heralds, na.rm = T),
+                         void_grubs = mean(df$void_grubs, na.rm = T),
+                         goldspentdiff = mean(df$goldspentdiff, na.rm = T),
+                         firstblood = mean(df$firstblood, na.rm = T),
+                         gamelengthins = 35*60)
+
+testdat2$result  <- predict(lmodel1,  testdat2 ,type = "response")
+
+testdat3 <- data.frame(side = 'Blue', 
+                         percent_total_kpm = mean(df$percent_total_kpm, na.rm = T),
+                         dragons = mean(df$dragons, na.rm = T),
+                         barons = min(df$barons):max(df$barons),
+                         wpm = mean(df$wpm, na.rm = T),
+                         firstmidtower = mean(df$firstmidtower, na.rm = T),
+                         firsttothreetowers = mean(df$firstmidtower, na.rm = T),
+                         towers = mean(df$towers, na.rm = T),
+                         inhibitors = mean(df$inhibitors, na.rm = T),
+                         golddiffat15 = mean(df$goldat15, na.rm = T),
+                         firstbaron = mean(df$firstbaron, na.rm = T),
+                         firstdragon = mean(df$firstdragon, na.rm = T),
+                         firstherald = mean(df$firstherald, na.rm = T),
+                         heralds = mean(df$heralds, na.rm = T),
+                         void_grubs = mean(df$void_grubs, na.rm = T),
+                         goldspentdiff = mean(df$goldspentdiff, na.rm = T),
+                         firstblood = mean(df$firstblood, na.rm = T),
+                         gamelengthins = 45*60)
+
+testdat3$result  <- predict(lmodel1,  testdat3 ,type = "response")
+
+
+
+testdat <- rbind(testdat1, testdat2, testdat3)
+
+plot <- testdat %>%
+  ggplot(aes(x = barons, y = result, color = as.factor(gamelengthins/60), shape = as.factor(gamelengthins/60))) +
+  geom_point() +
+  geom_line() +
+  theme_minimal() +
+  labs(
+    title = "Marginal Effects of Barons by Game Duration ",
+    x = "Barons",
+    y = "Probability of Win",
+    color = "Game Length (m)",
+    shape = "Game Length (m)"
+  )
+
+plot
+
+ggsave('marginal effects Barons.png', plot = plot, width = 10, height = 10/1.618, dpi = 300)
+
+```
+
+free up memory remove logistic models
+```{r}
+# Generate model names lmodel1 to lmodel24
+model_names <- paste("lmodel", 1:24, sep="")
+
+# Remove these models from the workspace
+rm(list=model_names)
+```
+           
+using select, keep only these in the df
+```{r}
+df2<-df%>%
+  select(result, side, teamname, season,
+         blue_top, blue_jg, blue_mid, blue_adc, blue_sup,
+         red_top, red_jg, red_mid, red_adc, red_sup,
+         blue_team, red_team, league,
+         blue_ban1, blue_ban2, blue_ban3, blue_ban4, blue_ban5,
+         red_ban1, red_ban2, red_ban3, red_ban4, red_ban5,
+         blue_top_player, blue_jg_player, blue_mid_player, blue_adc_player, blue_sup_player,
+         red_top_player, red_jg_player, red_mid_player, red_adc_player, red_sup_player,
+         blue_topjg, blue_midjg, blue_bot, blue_botjg, red_botjg, top_matchup, jg_matchup, mid_matchup, bot_matchup,
+         red_topjg, red_midjg, red_bot, league, golddiffat15, xpdiffat15, firstdragon, firstbaron, firstmidtower, firsttothreetowers, dragons, barons, wpm, golddiffat10, xpdiffat10, firstherald, void_grubs, firstblood, percent_total_kpm, elders, heralds, winner, goldspentdiff, towers, inhibitors,
+         blue_pick1, blue_pick2, blue_pick3, blue_pick4, blue_pick5, red_pick1, red_pick2, red_pick3, red_pick4, red_pick5)
+```
+
+prep for random forest, simplify data
+```{r}
+# Create a recipe for encoding champion variables
+recipe_obj <- recipe(~ ., data = df2) %>%
+  step_other(all_nominal(), threshold = 0.01)
+
+# Prepare the recipe
+prep_obj <- prep(recipe_obj, training = df2)
+
+# Apply the prepared recipe to the data
+encoded_data <- bake(prep_obj, new_data = df2)
+
+encoded_data$result <- as.factor(encoded_data$result)
+
+rm(df2)
+```
+
+subset data into testing and training
+```{r}
+# Set the seed for reproducibility
+set.seed(123)
+
+# Split the data into training and testing sets
+train_index <- createDataPartition(encoded_data$result, p = 0.8, list = FALSE)
+train_data <- encoded_data[train_index, ]
+test_data <- encoded_data[-train_index, ]
+```
+
+
+Random forest model 1 with all variables (draft plus ingame plus player)
+```{r}
+# Specify the formula for classification
+formula <- result ~ side + season + league +
+           blue_top + blue_jg + blue_mid + blue_adc + blue_sup +
+           red_top + red_jg + red_mid + red_adc + red_sup +
+           blue_ban1 + blue_ban2 + blue_ban3 + blue_ban4 + blue_ban5 +
+           red_ban1 + red_ban2 + red_ban3 + red_ban4 + red_ban5 + blue_bot + red_bot +
+           league + golddiffat15 + xpdiffat15 + golddiffat10 + xpdiffat10 +
+           firstdragon + firstbaron + firstmidtower + firsttothreetowers + firstherald + barons + dragons +                     void_grubs + heralds + firstblood + wpm + percent_total_kpm + elders +towers + goldspentdiff + inhibitors
+
+
+# Train the Random Forest model
+rf_model1 <- randomForest(formula, data = train_data,
+                         ntree = 100,
+                         mtry = 20, 
+                         max_depth = 50, 
+                         min_node_size= 30,
+                         importance = T)
+
+# Print model summary
+print(rf_model1)
+
+# Make predictions on the test data
+predictions <- predict(rf_model1, newdata = test_data)
+
+# Create a confusion matrix
+conf_matrix <- confusionMatrix(data= as.factor(predictions), reference= test_data$result)
+
+# Print the confusion matrix
+print(conf_matrix)
+
+#extract feature importance from rf results
+df_importance <- importance(rf_model) #saves importance (interpret rf)
+feature_importanceRF1 <- data.frame(Feature = rownames(df_importance), Importance = df_importance[, 'MeanDecreaseAccuracy']) #x axis in terms of percentage
+feature_importanceRF1 <- feature_importanceRF1 %>% arrange(desc(Importance))%>% slice_head(n=15)
+modelRF1_plot <- ggplot(feature_importanceRF1, aes(x = reorder(Feature, Importance), y = Importance)) +
+    geom_bar(stat = "identity") +
+    theme_minimal() +
+    coord_flip() +
+    labs(title = "RF Model 1: Feature Importance for Predicting Game Results", x = "Features", y = "Importance")
+print(modelRF1_plot)
+
+ggsave('rf1 all var importance.png', plot = modelRF1_plot, width = 10, height = 10/1.618, dpi = 300 )
+```
+
+
+
+Random forest 2 model with all in game variables
+```{r}
+# Specify the formula for classification
+formula <- result ~ side + golddiffat15 + xpdiffat15 + golddiffat10 + xpdiffat10 +
+           firstdragon + firstbaron + firstmidtower + firsttothreetowers + firstherald + barons + dragons +                     void_grubs + heralds + firstblood + wpm + percent_total_kpm + elders +towers + goldspentdiff + inhibitors
+
+
+# Train the Random Forest model
+rf_model2 <- randomForest(formula, data = train_data,
+                         ntree = 100,
+                         mtry = 20, 
+                         max_depth = 50, 
+                         min_node_size= 30,
+                         importance = T)
+
+# Print model summary
+print(rf_model2)
+
+# Make predictions on the test data
+predictions <- predict(rf_model2, newdata = test_data)
+
+# Create a confusion matrix
+conf_matrix <- confusionMatrix(data= as.factor(predictions), reference= test_data$result)
+
+# Print the confusion matrix
+print(conf_matrix)
+
+#extract feature importance from rf results
+df_importance <- importance(rf_model2) #saves importance (interpret rf)
+feature_importanceRF1 <- data.frame(Feature = rownames(df_importance), Importance = df_importance[, 'MeanDecreaseAccuracy']) #x axis in terms of percentage
+feature_importanceRF1 <- feature_importanceRF1 %>% arrange(desc(Importance))%>% slice_head(n=15)
+modelRF2_plot <- ggplot(feature_importanceRF1, aes(x = reorder(Feature, Importance), y = Importance)) +
+    geom_bar(stat = "identity") +
+    theme_minimal() +
+    coord_flip() +
+    labs(title = "RF Model 2: Feature Importance for Predicting Game Results", x = "Features", y = "Importance")
+print(modelRF2_plot)
+
+ggsave('rf2 in game vars importance.png', plot = modelRF2_plot, width = 10, height = 10/1.618, dpi = 300 )
+```
+
+prep for random forest with draft info 
+
+using select, keep only these in the df
+```{r}
+df2<-df%>%
+  filter(side == 'Blue')%>%
+  select(winner,
+         blue_top, blue_jg, blue_mid, blue_adc, blue_sup,
+         red_top, red_jg, red_mid, red_adc, red_sup,
+         blue_team, red_team, league,
+         blue_ban1, blue_ban2, blue_ban3, blue_ban4, blue_ban5,
+         red_ban1, red_ban2, red_ban3, red_ban4, red_ban5,
+         blue_top_player, blue_jg_player, blue_mid_player, blue_adc_player, blue_sup_player,
+         red_top_player, red_jg_player, red_mid_player, red_adc_player, red_sup_player,
+         blue_topjg, blue_midjg, blue_bot, blue_botjg, red_botjg, top_matchup, jg_matchup, mid_matchup, bot_matchup,
+         red_topjg, red_midjg, red_bot, league, blue_pick1, blue_pick2, blue_pick3, blue_pick4, blue_pick5, red_pick1, red_pick2, red_pick3, red_pick4, red_pick5)
+```
+
+numerically encoding to prep data
+```{r}
+# Specify the columns to encode
+character_cols <- c("blue_top", "blue_jg", "blue_mid", "blue_adc", "blue_sup",
+                       "red_top", "red_jg", "red_mid", "red_adc", "red_sup",
+                       "blue_team", "red_team", "league",
+                       "blue_ban1", "blue_ban2", "blue_ban3", "blue_ban4", "blue_ban5",
+                       "red_ban1", "red_ban2", "red_ban3", "red_ban4", "red_ban5",
+                       "blue_top_player", "blue_jg_player", "blue_mid_player", "blue_adc_player", "blue_sup_player",
+                       "red_top_player", "red_jg_player", "red_mid_player", "red_adc_player", "red_sup_player",
+                       "blue_topjg", "blue_midjg", "blue_bot", "blue_botjg", "red_botjg", "top_matchup", "jg_matchup", "mid_matchup", "bot_matchup",
+                       "red_topjg", "red_midjg", "red_bot", "league",
+                    "blue_pick1", "blue_pick2", "blue_pick3", "blue_pick4", "blue_pick5",
+                    "red_pick1", "red_pick2", "red_pick3", "red_pick4", "red_pick5")
+
+#encode side as binary, 0 = blue, 1 = red
+df2$winner[df2$winner == 'Blue'] <- 0
+df2$winner[df2$winner == 'Red'] <- 1
+df2$winner <- as.factor(df2$winner)
+
+
+# Encode unique strings into numeric
+for (col in character_cols) {
+  df2[[col]] <- as.numeric(factor(df2[[col]], levels = unique(df2[[col]])))
+}
+
+```
+
+subset data into testing and training
+```{r}
+# Set the seed for reproducibility
+set.seed(123)
+
+# Split the data into training and testing sets
+train_index <- createDataPartition(df2$winner, p = 0.8, list = FALSE)
+train_data <- df2[train_index, ]
+test_data <- df2[-train_index, ]
+```
+
+random forest model 3 with draft data with interactive terms specifying matchups
+```{r}
+# Specify the formula for classification
+formula <- winner ~ blue_top + blue_jg + blue_mid + blue_adc + blue_sup + red_top + red_jg + red_mid + red_adc + red_sup + blue_team + red_team + league + blue_ban1 + blue_ban2 + blue_ban3 + blue_ban4 + blue_ban5 + red_ban1 + red_ban2 + red_ban3 + red_ban4 + red_ban5 + blue_top_player + blue_jg_player + blue_mid_player + blue_adc_player + blue_sup_player + red_top_player + red_jg_player + red_mid_player + red_adc_player + red_sup_player + blue_topjg + blue_midjg + blue_bot + blue_botjg + red_botjg + top_matchup + jg_matchup + mid_matchup + bot_matchup + red_topjg + red_midjg + red_bot + league + blue_pick1 + blue_pick2 + blue_pick3 + blue_pick4 + blue_pick5 + red_pick1 + red_pick2 + red_pick3 + red_pick4 + red_pick5
+
+
+# Train the Random Forest model
+rf_model2 <- randomForest(formula, data = train_data,
+                         ntree = 100,
+                         mtry = 30, 
+                         max_depth = 150, 
+                         min_node_size= 15,
+                         importance = T)
+
+# Print model summary
+print(rf_model2)
+
+# Make predictions on the test data
+predictions <- predict(rf_model2, newdata = test_data)
+
+# Create a confusion matrix
+conf_matrix <- confusionMatrix(data= as.factor(predictions), reference= test_data$winner)
+
+# Print the confusion matrix
+print(conf_matrix)
+
+#extract feature importance from rf results
+df_importance <- importance(rf_model2) #saves importance (interpret rf)
+feature_importanceRF1 <- data.frame(Feature = rownames(df_importance), Importance = df_importance[, 'MeanDecreaseAccuracy']) #x axis in terms of percentage
+feature_importanceRF1 <- feature_importanceRF1 %>% arrange(desc(Importance)) %>%slice_head(n = 15)
+modelRF1_plot <- ggplot(feature_importanceRF1, aes(x = reorder(Feature, Importance), y = Importance)) +
+    geom_bar(stat = "identity") +
+    theme_minimal() +
+    coord_flip() +
+    labs(title = "RF Model 3: Feature Importance for Predicting Game Winner", x = "Features", y = "Importance")
+print(modelRF1_plot)
+
+ggsave('rf2 draft importance.png', plot = modelRF1_plot, width = 10, height = 10/1.618, dpi = 300 )
+```
+random forest model 4 with draft data  (only champions)
+```{r}
+# Specify the formula for classification
+formula <- winner ~ blue_top + blue_jg + blue_mid + blue_adc + blue_sup + red_top + red_jg + red_mid + red_adc + red_sup  + blue_ban1 + blue_ban2 + blue_ban3 + blue_ban4 + blue_ban5 + red_ban1 + red_ban2 + red_ban3 + red_ban4 + red_ban5 + blue_topjg + blue_midjg + blue_bot + blue_botjg + red_botjg + top_matchup + jg_matchup + mid_matchup + bot_matchup + red_topjg + red_midjg + red_bot + blue_pick1 + blue_pick2 + blue_pick3 + blue_pick4 + blue_pick5 + red_pick1 + red_pick2 + red_pick3 + red_pick4 + red_pick5
+
+
+# Train the Random Forest model
+rf_model2 <- randomForest(formula, data = train_data,
+                         ntree = 100,
+                         mtry = 30, 
+                         max_depth = 150, 
+                         min_node_size= 15,
+                         importance = T)
+
+# Print model summary
+print(rf_model2)
+
+# Make predictions on the test data
+predictions <- predict(rf_model2, newdata = test_data)
+
+# Create a confusion matrix
+conf_matrix <- confusionMatrix(data= as.factor(predictions), reference= test_data$winner)
+
+# Print the confusion matrix
+print(conf_matrix)
+
+#extract feature importance from rf results
+df_importance <- importance(rf_model2) #saves importance (interpret rf)
+feature_importanceRF1 <- data.frame(Feature = rownames(df_importance), Importance = df_importance[, 'MeanDecreaseAccuracy']) #x axis in terms of percentage
+feature_importanceRF1 <- feature_importanceRF1 %>% arrange(desc(Importance)) %>%slice_head(n = 15)
+modelRF1_plot <- ggplot(feature_importanceRF1, aes(x = reorder(Feature, Importance), y = Importance)) +
+    geom_bar(stat = "identity") +
+    theme_minimal() +
+    coord_flip() +
+    labs(title = "RF Model 4: Feature Importance for Predicting Game Winner", x = "Features", y = "Importance")
+print(modelRF1_plot)
+
+ggsave('rf2 draft importance champions only.png', plot = modelRF1_plot, width = 10, height = 10/1.618, dpi = 300 )
+```
+
+
+prep data for xgboost
+
+using select, keep only these in the df
+```{r}
+df2<-df%>%
+  filter(side == 'Blue')%>%
+  select(winner,
+         blue_top, blue_jg, blue_mid, blue_adc, blue_sup,
+         red_top, red_jg, red_mid, red_adc, red_sup,
+         blue_team, red_team, league,
+         blue_ban1, blue_ban2, blue_ban3, blue_ban4, blue_ban5,
+         red_ban1, red_ban2, red_ban3, red_ban4, red_ban5,
+         blue_top_player, blue_jg_player, blue_mid_player, blue_adc_player, blue_sup_player,
+         red_top_player, red_jg_player, red_mid_player, red_adc_player, red_sup_player,
+         blue_topjg, blue_midjg, blue_bot, blue_botjg, red_botjg, top_matchup, jg_matchup, mid_matchup, bot_matchup,
+         red_topjg, red_midjg, red_bot, league, blue_pick1, blue_pick2, blue_pick3, blue_pick4, blue_pick5, red_pick1, red_pick2, red_pick3, red_pick4, red_pick5)
+```
+
+numerically encoding to prep data
+```{r}
+# Specify the columns to encode
+character_cols <- c("blue_top", "blue_jg", "blue_mid", "blue_adc", "blue_sup",
+                       "red_top", "red_jg", "red_mid", "red_adc", "red_sup",
+                       "blue_team", "red_team", "league",
+                       "blue_ban1", "blue_ban2", "blue_ban3", "blue_ban4", "blue_ban5",
+                       "red_ban1", "red_ban2", "red_ban3", "red_ban4", "red_ban5",
+                       "blue_top_player", "blue_jg_player", "blue_mid_player", "blue_adc_player", "blue_sup_player",
+                       "red_top_player", "red_jg_player", "red_mid_player", "red_adc_player", "red_sup_player",
+                       "blue_topjg", "blue_midjg", "blue_bot", "blue_botjg", "red_botjg", "top_matchup", "jg_matchup", "mid_matchup", "bot_matchup",
+                       "red_topjg", "red_midjg", "red_bot", "league",
+                    "blue_pick1", "blue_pick2", "blue_pick3", "blue_pick4", "blue_pick5",
+                    "red_pick1", "red_pick2", "red_pick3", "red_pick4", "red_pick5")
+
+#encode side as binary, 0 = blue, 1 = red
+df2$winner[df2$winner == 'Blue'] <- 0
+df2$winner[df2$winner == 'Red'] <- 1
+df2$winner <- as.numeric(df2$winner)
+
+
+# Encode unique strings into numeric
+for (col in character_cols) {
+  df2[[col]] <- as.numeric(factor(df2[[col]], levels = unique(df2[[col]])))
+}
+
+```
+
+subset data into testing and training
+```{r}
+# Set the seed for reproducibility
+set.seed(123)
+
+# Split the data into training and testing sets
+train_index <- createDataPartition(df2$winner, p = 0.8, list = FALSE)
+train_data <- df2[train_index, ]
+test_data <- df2[-train_index, ]
+```
+
+xgboost for draft prediction
+```{r}
+# Specify the formula for classification
+selected_train_data <- train_data %>%
+  select(winner,
+         blue_top, blue_jg, blue_mid, blue_adc, blue_sup,
+         red_top, red_jg, red_mid, red_adc, red_sup,
+         blue_team, red_team, league,
+         blue_ban1, blue_ban2, blue_ban3, blue_ban4, blue_ban5,
+         red_ban1, red_ban2, red_ban3, red_ban4, red_ban5,
+         blue_top_player, blue_jg_player, blue_mid_player, blue_adc_player, blue_sup_player,
+         red_top_player, red_jg_player, red_mid_player, red_adc_player, red_sup_player,
+         blue_topjg, blue_midjg, blue_bot, blue_botjg, red_botjg, top_matchup, jg_matchup, mid_matchup, bot_matchup,
+         red_topjg, red_midjg, red_bot, league, blue_pick1, blue_pick2, blue_pick3, blue_pick4, blue_pick5, red_pick1, red_pick2, red_pick3, red_pick4, red_pick5)
+
+
+
+
+
+# Train the XGBoost model
+xgb_model <- xgboost(data = as.matrix(selected_train_data%>%select(-winner)), 
+                     label = selected_train_data$winner,
+                     nrounds = 200,
+                     objective = "binary:logistic",
+                     max_depth = 150,
+                     eta = 0.3,
+                     gamma = 0,
+                     colsample_bytree = 1,
+                     min_child_weight = 1)
+
+# Convert test data to a numeric matrix
+test_matrix <- as.matrix(test_data %>% select(-winner))
+
+# Make predictions on the test data
+predictions <- predict(xgb_model, test_matrix, type = "response")
+
+# Convert probabilities to class labels
+predictions <- ifelse(predictions > 0.5, 1, 0)
+
+# Create a confusion matrix
+conf_matrix <- confusionMatrix(as.factor(predictions), as.factor(test_data$winner))
+
+# Print the confusion matrix
+print(conf_matrix)
+
+# Plot feature importance
+importance <- xgb.importance(model = xgb_model)
+importance_df <- as.data.frame(importance) %>% slice_head(n=15)
+importance_plot <- ggplot(importance_df, aes(x = reorder(Feature, Gain), y = Gain)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(title = "XGBoost Model 1: Feature Importance for Predicting Game Winner",
+       x = "Features",
+       y = "Gain") +
+  theme_minimal() +
+  coord_flip()
+
+print(importance_plot)
+
+ggsave('xgboost 1 draft with player.png', plot = importance_plot, width = 10, height = 10/1.618, dpi = 300 )
+
+
+
+```
+
+using select, keep only these in the df
+```{r}
+df2<-df%>%
+  filter(side == 'Blue')%>%
+  select(winner,
+         blue_top, blue_jg, blue_mid, blue_adc, blue_sup,
+         red_top, red_jg, red_mid, red_adc, red_sup,
+         blue_ban1, blue_ban2, blue_ban3, blue_ban4, blue_ban5,
+         red_ban1, red_ban2, red_ban3, red_ban4, red_ban5,
+         blue_topjg, blue_midjg, blue_bot, blue_botjg, red_botjg, top_matchup, jg_matchup, mid_matchup, bot_matchup,
+         red_topjg, red_midjg, red_bot, blue_pick1, blue_pick2, blue_pick3, blue_pick4, blue_pick5, red_pick1, red_pick2, red_pick3, red_pick4, red_pick5)
+```
+
+numerically encoding to prep data
+```{r}
+# Specify the columns to encode
+character_cols <- c("blue_top", "blue_jg", "blue_mid", "blue_adc", "blue_sup",
+          "red_top", "red_jg", "red_mid", "red_adc", "red_sup",
+          "blue_ban1", "blue_ban2", "blue_ban3", "blue_ban4", "blue_ban5",
+          "red_ban1", "red_ban2", "red_ban3", "red_ban4", "red_ban5",
+          "blue_topjg", "blue_midjg", "blue_bot", "blue_botjg", "red_botjg", "top_matchup", "jg_matchup", "mid_matchup", "bot_matchup",
+          "red_topjg", "red_midjg", "red_bot", "blue_pick1", "blue_pick2", "blue_pick3", "blue_pick4", "blue_pick5", "red_pick1", "red_pick2", "red_pick3", "red_pick4", "red_pick5")
+
+
+df2$winner[df2$winner == 'Blue'] <- 0
+df2$winner[df2$winner == 'Red'] <- 1
+df2$winner <- as.numeric(df2$winner)
+
+# Encode unique strings into numeric
+for (col in character_cols) {
+  df2[[col]] <- as.numeric(factor(df2[[col]], levels = unique(df2[[col]])))
+}
+
+#encode side as binary, 0 = blue, 1 = red
+
+
+```
+
+subset data into testing and training
+```{r}
+# Set the seed for reproducibility
+set.seed(123)
+
+# Split the data into training and testing sets
+train_index <- createDataPartition(df2$winner, p = 0.8, list = FALSE)
+train_data <- df2[train_index, ]
+test_data <- df2[-train_index, ]
+```
+
+xgboost model 2 for draft prediction only champion picks and bans
+```{r}
+# Specify the formula for classification
+selected_train_data <- train_data %>%
+  select(winner,
+         blue_top, blue_jg, blue_mid, blue_adc, blue_sup,
+         red_top, red_jg, red_mid, red_adc, red_sup,
+         blue_ban1, blue_ban2, blue_ban3, blue_ban4, blue_ban5,
+         red_ban1, red_ban2, red_ban3, red_ban4, red_ban5,
+         blue_topjg, blue_midjg, blue_bot, blue_botjg, red_botjg, top_matchup, jg_matchup, mid_matchup, bot_matchup,
+         red_topjg, red_midjg, red_bot, blue_pick1, blue_pick2, blue_pick3, blue_pick4, blue_pick5, red_pick1, red_pick2, red_pick3, red_pick4, red_pick5)
+
+
+
+
+
+# Train the XGBoost model
+xgb_model <- xgboost(data = as.matrix(selected_train_data%>%select(-winner)), 
+                     label = selected_train_data$winner,
+                     nrounds = 200,
+                     objective = "binary:logistic",
+                     max_depth = 150,
+                     eta = 0.3,
+                     gamma = 0,
+                     colsample_bytree = 1,
+                     min_child_weight = 1)
+
+# Convert test data to a numeric matrix
+test_matrix <- as.matrix(test_data %>% select(-winner))
+
+# Make predictions on the test data
+predictions <- predict(xgb_model, test_matrix, type = "response")
+
+# Convert probabilities to class labels
+predictions <- ifelse(predictions > 0.5, 1, 0)
+
+# Create a confusion matrix
+conf_matrix <- confusionMatrix(as.factor(predictions), as.factor(test_data$winner))
+
+# Print the confusion matrix
+print(conf_matrix)
+
+# Plot feature importance
+importance <- xgb.importance(model = xgb_model)
+importance_df <- as.data.frame(importance) %>% slice_head(n=15)
+importance_plot <- ggplot(importance_df, aes(x = reorder(Feature, Gain), y = Gain)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(title = "XGBoost Model 2: Feature Importance for Predicting Winner",
+       x = "Features",
+       y = "Gain") +
+  theme_minimal() +
+  coord_flip()
+
+print(importance_plot)
+
+ggsave('xgboost 2 draft.png', plot = importance_plot, width = 10, height = 10/1.618, dpi = 300 )
+
+```
+
+using select, keep only these in the df
+```{r}
+df2<-df%>%
+  filter(side == 'Blue')%>%
+  filter(season == 12)%>%
+  select(winner,
+         blue_top, blue_jg, blue_mid, blue_adc, blue_sup,
+         red_top, red_jg, red_mid, red_adc, red_sup,
+         blue_ban1, blue_ban2, blue_ban3, blue_ban4, blue_ban5,
+         red_ban1, red_ban2, red_ban3, red_ban4, red_ban5,
+         blue_topjg, blue_midjg, blue_bot, blue_botjg, red_botjg, top_matchup, jg_matchup, mid_matchup, bot_matchup,
+         red_topjg, red_midjg, red_bot, blue_pick1, blue_pick2, blue_pick3, blue_pick4, blue_pick5, red_pick1, red_pick2, red_pick3, red_pick4, red_pick5)
+```
+
+numerically encoding to prep data
+```{r}
+# Specify the columns to encode
+character_cols <- c("blue_top", "blue_jg", "blue_mid", "blue_adc", "blue_sup",
+          "red_top", "red_jg", "red_mid", "red_adc", "red_sup",
+          "blue_ban1", "blue_ban2", "blue_ban3", "blue_ban4", "blue_ban5",
+          "red_ban1", "red_ban2", "red_ban3", "red_ban4", "red_ban5",
+          "blue_topjg", "blue_midjg", "blue_bot", "blue_botjg", "red_botjg", "top_matchup", "jg_matchup", "mid_matchup", "bot_matchup",
+          "red_topjg", "red_midjg", "red_bot", "blue_pick1", "blue_pick2", "blue_pick3", "blue_pick4", "blue_pick5", "red_pick1", "red_pick2", "red_pick3", "red_pick4", "red_pick5")
+
+
+df2$winner[df2$winner == 'Blue'] <- 0
+df2$winner[df2$winner == 'Red'] <- 1
+df2$winner <- as.numeric(df2$winner)
+
+# Encode unique strings into numeric
+for (col in character_cols) {
+  df2[[col]] <- as.numeric(factor(df2[[col]], levels = unique(df2[[col]])))
+}
+
+#encode side as binary, 0 = blue, 1 = red
+
+```
+
+
+subset data into testing and training
+```{r}
+# Set the seed for reproducibility
+set.seed(123)
+
+# Split the data into training and testing sets
+train_index <- createDataPartition(df2$winner, p = 0.8, list = FALSE)
+train_data <- df2[train_index, ]
+test_data <- df2[-train_index, ]
+```
+
+xgboost model 2 for draft prediction only champion picks and bans
+```{r}
+# Specify the formula for classification
+selected_train_data <- train_data %>%
+  select(winner,
+         blue_top, blue_jg, blue_mid, blue_adc, blue_sup,
+         red_top, red_jg, red_mid, red_adc, red_sup,
+         blue_ban1, blue_ban2, blue_ban3, blue_ban4, blue_ban5,
+         red_ban1, red_ban2, red_ban3, red_ban4, red_ban5,
+         blue_topjg, blue_midjg, blue_bot, blue_botjg, red_botjg, top_matchup, jg_matchup, mid_matchup, bot_matchup,
+         red_topjg, red_midjg, red_bot, blue_pick1, blue_pick2, blue_pick3, blue_pick4, blue_pick5, red_pick1, red_pick2, red_pick3, red_pick4, red_pick5)
+
+
+
+
+
+# Train the XGBoost model
+xgb_model <- xgboost(data = as.matrix(selected_train_data%>%select(-winner)), 
+                     label = selected_train_data$winner,
+                     nrounds = 200,
+                     objective = "binary:logistic",
+                     max_depth = 150,
+                     eta = 0.3,
+                     gamma = 0,
+                     colsample_bytree = 1,
+                     min_child_weight = 1)
+
+# Convert test data to a numeric matrix
+test_matrix <- as.matrix(test_data %>% select(-winner))
+
+# Make predictions on the test data
+predictions <- predict(xgb_model, test_matrix, type = "response")
+
+# Convert probabilities to class labels
+predictions <- ifelse(predictions > 0.5, 1, 0)
+
+# Create a confusion matrix
+conf_matrix <- confusionMatrix(as.factor(predictions), as.factor(test_data$winner))
+
+# Print the confusion matrix
+print(conf_matrix)
+
+# Plot feature importance
+importance <- xgb.importance(model = xgb_model)
+importance_df <- as.data.frame(importance) %>% slice_head(n=15)
+importance_plot <- ggplot(importance_df, aes(x = reorder(Feature, Gain), y = Gain)) +
+  geom_bar(stat = "identity", fill = "skyblue") +
+  labs(title = "XGBoost Model 3: Feature Importance for Predicting Winner",
+       x = "Features",
+       y = "Gain") +
+  theme_minimal() +
+  coord_flip()
+
+print(importance_plot)
+
+ggsave('xgboost 3 draft season 12.png', plot = importance_plot, width = 10, height = 10/1.618, dpi = 300 )
+
+```
+
+
+
+
+
